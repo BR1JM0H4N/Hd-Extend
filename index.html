@@ -237,6 +237,12 @@
       gap: 14px;
       box-shadow: 0 8px 28px rgba(0,0,0,.28)
     }
+    label.f[hidden] { display: none; }
+    select#method {
+      width: 100%; padding: 10px 12px; border-radius: 12px; font: inherit;
+      color: inherit; background: transparent; border: 1px solid currentColor;
+    }
+    select#method option { color: #000; }
     label.f {
       display: grid;
       gap: 2px;
@@ -669,6 +675,8 @@
       <div class="panel">
         <input type="file" id="file" accept="image/*" hidden>
         <button class="go tonal" id="pick">Choose image</button>
+        <label class="f"><span class="r">Method</span><select id="method" aria-label="Extension method"><option value="1">Method 1 – colour field</option><option value="2">Method 2 – edge gradient</option></select></label>
+        <button class="go tonal" id="resetSl" title="Reset all sliders to defaults">Reset sliders</button>
         <label class="sw"><span>Lock sliders</span><input type="checkbox" id="lockSl" aria-label="Lock sliders"></label>
 
         <div>
@@ -690,6 +698,7 @@
           <label class="f"><span class="r">Seam blend<output></output></span><input type="range" data-k="feather" min="0" max="150" value="40"></label>
           <label class="f"><span class="r">Edge hold<output></output></span><input type="range" data-k="hold" min="20" max="1500" value="250"></label>
           <label class="f"><span class="r">Grain match<output></output></span><input type="range" data-k="grain" min="0" max="200" value="100"></label>
+          <label class="f" id="ulRow"><span class="r">Extrapolation (UL)<output></output></span><input type="range" data-k="ul" min="1" max="2" step="0.01" value="1.12"></label>
         </div>
         </details>
         <label class="sw"><span>Show where the original sits</span><input type="checkbox" id="showbox"></label>
@@ -747,8 +756,11 @@
       smooth: 60,
       feather: 40,
       grain: 100,
-      hold: 250
+      hold: 250,
+      ul: 1.12,
+      method: 1
     };
+    const DEF = {...S};
     const PRE = [['Desktop', 1920, 1080], ['4K', 3840, 2160], ['Ultrawide', 3440, 1440], ['Phone', 1170, 2532], ['Phone 16:9', 1080, 1920], ['Tablet', 2048, 2732], ['Square', 2048, 2048]];
     let img = null, timer = null, lastBlob = null;
 
@@ -780,7 +792,7 @@
     }
     const pct = k=>k === 'sx' || k === 'sy' || k === 'ax' || k === 'ay' || k === 'grain';
     function paint(k) {
-      const el = document.querySelector('[data-k='+k+']'); el.value = S[k]; el.style.setProperty('--p', ((S[k]-el.min)/(el.max-el.min)*100)+'%'); el.parentNode.querySelector('output').textContent = Math.round(S[k])+(pct(k)?'%': k === 'grain'?'': ' px');
+      const el = document.querySelector('[data-k='+k+']'); el.value = S[k]; el.style.setProperty('--p', ((S[k]-el.min)/(el.max-el.min)*100)+'%'); el.parentNode.querySelector('output').textContent = (k === 'ul'?(+S[k]).toFixed(2):Math.round(S[k]))+(k === 'ul'?'': pct(k)?'%': ' px');
     }
     function link(k) {
       if (!$('lock').checked)return;
@@ -808,6 +820,15 @@
     $('lockSl').onchange = ()=>document.querySelectorAll('input[type=range]').forEach(e => {
       e.disabled = $('lockSl').checked;
     });
+    $('method').onchange = ()=> {
+      S.method = +$('method').value; $('ulRow').hidden = S.method === 2; doneFull = -1; sched();
+    };
+    $('resetSl').onclick = ()=> {
+      Object.keys(DEF).forEach(k => { if (k !== 'w' && k !== 'h' && k !== 'method') S[k] = DEF[k]; });
+      ratio = 1; fromSliders();
+      document.querySelectorAll('input[data-k]').forEach(el => paint(el.dataset.k));
+      sched();
+    };
     $('showbox').onchange = ()=>$('view').classList.toggle('showbox', $('showbox').checked);
 
     function autoScale() {
@@ -883,9 +904,9 @@
       }return x;
     }
 
-    function base(s) {
-      let Q = CA.get(s); if (Q)return Q;
-      if (CA.size >= 4)CA.delete(CA.keys().next().value);
+    function base1(s) {
+      let Q = CA.get('1:'+s); if (Q)return Q;
+      if (CA.size >= 8)CA.delete(CA.keys().next().value);
       const w = Math.max(1, Math.round(img.naturalWidth*s)),
       h = Math.max(1, Math.round(img.naturalHeight*s));
       const t = document.createElement('canvas'); t.width = w; t.height = h;
@@ -986,7 +1007,7 @@
         hi,
         ec: null,
         ek: -1
-      }; CA.set(s, Q); return Q;
+      }; CA.set('1:'+s, Q); return Q;
     }
 
     // edge profiles: average of 3 outermost pixels, then smoothed (cached per smoothing value)
@@ -1035,42 +1056,8 @@
       Q.ek = S.smooth; return Q.ec;
     }
 
-    function fit() {
-      if (!img||!lastW)return;
-      const aw = $('stage').clientWidth-24,
-      ah = innerHeight*(innerWidth >= 900?.82: .36);
-      const k = Math.min(1, aw/lastW, ah/lastH),
-      c = $('c');
-      c.style.width = lastW*k+'px'; c.style.height = lastH*k+'px';
-    }
-    addEventListener('resize', fit);
-
-    async function render(final, onProg) {
-      if (!img)return;
-      const rid=++renderId;
-      const nw = img.naturalWidth,
-      nh = img.naturalHeight;
-      const W0 = Math.max(S.w, nw),
-      H0 = Math.max(S.h, nh);
-      if ($('W').value != W0)$('W').value = W0;
-      if ($('H').value != H0)$('H').value = H0;
-      const sc = final?1: previewScale(W0, H0);
-      if (sc === 1 && doneFull === ver)return; // full-quality result already on screen
-      const Q = base(sc),
-      w = Q.w,
-      h = Q.h,
-      src = Q.src,
-      CF = Q.CF,
-      lo = Q.lo,
-      hi = Q.hi;
-      const W = sc === 1?W0: Math.max(w, Math.round(W0*sc)),
-      H = sc === 1?H0: Math.max(h, Math.round(H0*sc));
-      const x0 = Math.round((W-w)*S.ax/100),
-      y0 = Math.round((H-h)*S.ay/100);
-      const cv = $('c');
-      if (cv.width !== W)cv.width = W;
-      if (cv.height !== H)cv.height = H;
-      const ctx = cv.getContext('2d');
+    function makeSynth1(Q, sc, W, H, x0, y0) {
+      const w = Q.w, h = Q.h, src = Q.src, CF = Q.CF, lo = Q.lo, hi = Q.hi;
       const E = edges(Q),
       EL = E.EL,
       ER = E.ER,
@@ -1095,7 +1082,7 @@
       ps = [0,
         0,
         0],
-      UL = 1.8;
+      UL = S.ul;
       function field(x, y, o) {
         let u = (x-w/2)/(w/2),
         v = (y-h/2)/(h/2);
@@ -1108,55 +1095,9 @@
         }
       }
 
-      // The untouched interior of the original is copied 1:1; only margins + seam band are computed.
-      const fi = Math.ceil(f);
-      const ix0 = L?fi: 0,
-      ix1 = w-(R?fi: 0),
-      iy0 = T?fi: 0,
-      iy1 = h-(B?fi: 0);
-      const hasI = ix0 < ix1 && iy0 < iy1;
-      let regions;
-      if (hasI) {
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(Q.t, ix0, iy0, ix1-ix0, iy1-iy0, x0+ix0, y0+iy0, ix1-ix0, iy1-iy0);
-        const gx0 = x0+ix0,
-        gx1 = x0+ix1,
-        gy0 = y0+iy0,
-        gy1 = y0+iy1;
-        regions = [[0,
-          W,
-          0,
-          gy0],
-          [0,
-            W,
-            gy1,
-            H],
-          [0,
-            gx0,
-            gy0,
-            gy1],
-          [gx1,
-            W,
-            gy0,
-            gy1]];
-      } else regions = [[0,
-          W,
-          0,
-          H]];
 
-      const MAXPX = 4e6;
-      if (!OB || OB.length < MAXPX*4)OB = new Uint8ClampedArray(MAXPX*4);
-      const o = OB;
-      let tot = 0,
-      done = 0;
-      for (const [xa, xb, ya, yb] of regions)tot += Math.max(0, xb-xa)*Math.max(0, yb-ya);
-      const bandPx = onProg?3e5: MAXPX,
-      t0 = performance.now(); let lastY = t0;
-      for (const [xa, xb, ya, yb] of regions) {
-        const sw = xb-xa; if (sw <= 0 || yb <= ya)continue;
-        const bh = Math.max(1, Math.floor(bandPx/sw));
-        for (let ys = ya; ys < yb; ys += bh) {
-          const ye = Math.min(yb, ys+bh);
+      function fill(o, xa, xb, ys, ye) {
+        const sw = xb-xa;
           for (let y = ys; y < ye; y++) {
             const ry = y-y0,
             dy = ry < 0?-ry: ry >= h?ry-h+1: 0,
@@ -1214,6 +1155,322 @@
               o[i] = r; o[i+1] = gg; o[i+2] = b; o[i+3] = 255;
             }
           }
+      }
+      return {L, R, T, B, f, fill};
+    }
+
+/*CORE-START*/
+    // How the extension works (per edge, going outward):
+    //  * the colour AT the edge and its slope are measured (parabola through three depths, so the slope is the true edge slope)
+    //  * the colour keeps following that slope, but the slope fades out smoothly (exponential approach, no hard clamp, no kink)
+    //  * if the gradient would run past the colours that exist along the border, the whole fade is shortened proportionally,
+    //    so it settles smoothly onto the border's own darkest/lightest colour instead of hitting a flat plateau
+    //  * the further from the edge, the more the profile is smoothed sideways, so arches/blobs relax into the wide background
+    //  * corners are made in two stages (sides first, then top/bottom from the already-extended rows) so nothing creases
+    const D3 = 3, BETA = .5;
+
+    // robust colour range of the border, used only as a guard-rail
+    function borderRange(src, w, h) {
+      const bw = Math.max(6, Math.round(Math.min(w, h)*.06)),
+      stp = Math.max(1, Math.floor(Math.sqrt(w*h/9000))),
+      ch = [[], [], []];
+      for (let y = 0; y < h; y += stp)for (let x = 0; x < w; x += stp) {
+        if (x >= bw && x < w-bw && y >= bw && y < h-bw)continue;
+        const p = (y*w+x)*4; ch[0].push(src[p]); ch[1].push(src[p+1]); ch[2].push(src[p+2]);
+      }
+      const lo = [0, 0, 0], hi = [255, 255, 255];
+      for (let k = 0; k < 3; k++) {
+        const a = ch[k].sort((p, q)=>p-q), n = a.length;
+        if (n) {
+          lo[k] = a[Math.floor(n*.01)]; hi[k] = a[Math.min(n-1, Math.floor(n*.99))];
+        }
+      }
+      return {lo, hi};
+    }
+
+    function depthsFor(dim, s, nw, nh) {
+      const b = Math.max(12, Math.min(80, Math.round(.05*Math.min(nw, nh))));
+      let G = Math.max(2, Math.round(b*s)); G = Math.min(G, dim-1-D3);
+      return G < 2?{G: 0, m: 0}: {G, m: Math.max(1, Math.round(G/2))};
+    }
+
+    function med(arr) {
+      const a = Float32Array.from(arr).sort(); return a.length?a[a.length>>1]: 0;
+    }
+
+    // raw edge samples: a0 = colour at the edge, a1/a2 = colour m and G pixels inside; nz = noise level (robust)
+    function rawEdge(len, at, dp, src) {
+      const a0 = new Float32Array(len*3), a1 = new Float32Array(len*3), a2 = new Float32Array(len*3), z = new Float32Array(len*3);
+      const {G, m} = dp;
+      for (let i = 0; i < len; i++) {
+        for (let d = 0; d < D3; d++) {
+          let p = at(i, d)*4; a0[i*3] += src[p]; a0[i*3+1] += src[p+1]; a0[i*3+2] += src[p+2];
+          if (G) {
+            p = at(i, m+d)*4; a1[i*3] += src[p]; a1[i*3+1] += src[p+1]; a1[i*3+2] += src[p+2];
+            p = at(i, G+d)*4; a2[i*3] += src[p]; a2[i*3+1] += src[p+1]; a2[i*3+2] += src[p+2];
+          }
+        }
+        const q = at(i, 0)*4; z[i*3] = src[q]; z[i*3+1] = src[q+1]; z[i*3+2] = src[q+2];
+        for (let c = 0; c < 3; c++) {
+          a0[i*3+c] /= D3; a1[i*3+c] /= D3; a2[i*3+c] /= D3;
+        }
+      }
+      const zb = blur(z, len, 3), res = new Float32Array(len);
+      for (let i = 0; i < len; i++)res[i] = ((z[i*3]-zb[i*3])+(z[i*3+1]-zb[i*3+1])+(z[i*3+2]-zb[i*3+2]))/3;
+      const m0 = med(res); for (let i = 0; i < len; i++)res[i] = Math.abs(res[i]-m0);
+      return {a0, a1, a2, nz: 1.4826*med(res)};
+    }
+
+    // multi-scale profile set for one edge (n samples along it)
+    function makeSet(n, a0, a1, a2, G, m, r0, s, tmax) {
+      const kr = new Float32Array(n*3);
+      if (G) {
+        const u1 = m, u2 = G, den = u1*u2*(u2-u1), cap = 1.5/s;
+        for (let j = 0; j < n*3; j++) {
+          const c1 = ((a1[j]-a0[j])*u2*u2-(a2[j]-a0[j])*u1*u1)/den; // slope going inward at the edge
+          kr[j] = Math.max(-cap, Math.min(cap, -c1));
+        }
+      }
+      const Rd = [r0]; let nx = Math.max(r0*2, Math.round(8*s), 4);
+      while (nx < n/2) {
+        Rd.push(nx); nx *= 2;
+      }
+      Rd.push(n);
+      const kmin = Math.max(2, Math.round(24*s)), A = [], K = [];
+      for (let k = 0; k < Rd.length; k++) {
+        A.push(blur(a0, n, Rd[k])); K.push(blur(kr, n, Math.max(Rd[k], kmin)));
+      }
+      const nl = Rd.length, kt = new Int16Array(tmax+1), tt = new Float32Array(tmax+1);
+      for (let d = 0; d <= tmax; d++) {
+        const rho = r0+BETA*d;
+        if (rho >= Rd[nl-1]) {
+          kt[d] = nl-2; tt[d] = 1;
+        } else {
+          let k = 0; while (k < nl-2 && Rd[k+1] <= rho)k++;
+          kt[d] = k; tt[d] = Math.max(0, Math.min(1, (rho-Rd[k])/(Rd[k+1]-Rd[k])));
+        }
+      }
+      return {A, K, A0: A[0], K0: K[0], kt, tt};
+    }
+
+    function sideEdges(Q, W, H, nw, nh) {
+      const key = S.smooth+'|'+Math.max(W, H);
+      if (Q.ek === key)return Q.ec;
+      const {w, h, src, s} = Q, r0 = Math.round(S.smooth*s), tm = Math.max(W, H)+2;
+      const gh = depthsFor(w, s, nw, nh), gv = depthsFor(h, s, nw, nh);
+      const rL = rawEdge(h, (i, d)=>i*w+Math.min(d, w-1), gh, src),
+      rR = rawEdge(h, (i, d)=>i*w+w-1-Math.min(d, w-1), gh, src),
+      rT = rawEdge(w, (i, d)=>Math.min(d, h-1)*w+i, gv, src),
+      rB = rawEdge(w, (i, d)=>(h-1-Math.min(d, h-1))*w+i, gv, src);
+      Q.ec = {
+        PL: makeSet(h, rL.a0, rL.a1, rL.a2, gh.G, gh.m, r0, s, tm),
+        PR: makeSet(h, rR.a0, rR.a1, rR.a2, gh.G, gh.m, r0, s, tm),
+        rT, rB, gv, gh, nz: {L: rL.nz, R: rR.nz, T: rT.nz, B: rB.nz}};
+      Q.ek = key; return Q.ec;
+    }
+
+    function makeSynth2(Q, sc, W, H, x0, y0, nw, nh) {
+      const w = Q.w, h = Q.h, src = Q.src, lo = Q.lo, hi = Q.hi;
+      const L = x0 > 0, R = x0+w < W, T = y0 > 0, B = y0+h < H;
+      const tau = Math.max(1, S.hold*sc), f = Math.max(1, S.feather*sc), r0 = Math.round(S.smooth*sc);
+      const E = sideEdges(Q, W, H, nw, nh), PL = E.PL, PR = E.PR;
+
+      function lamOf(a, kv, l, hh) {
+        if (kv === 0)return 1;
+        const tr = (kv < 0?-kv: kv)*tau, room = kv < 0?a-l: hh-a;
+        return room >= tr?1: (room > 0?room/tr: 0);
+      }
+      // colour at distance d (>=1) outside the edge, at position i along it
+      function ext(P, i, d, o) {
+        const i3 = i*3, k = P.kt[d], t = P.tt[d], A0 = P.A[k], K0 = P.K[k];
+        let a, b, c, ka, kb, kc;
+        if (t > 0) {
+          const A1 = P.A[k+1], K1 = P.K[k+1], u = 1-t;
+          a = A0[i3]*u+A1[i3]*t; b = A0[i3+1]*u+A1[i3+1]*t; c = A0[i3+2]*u+A1[i3+2]*t;
+          ka = K0[i3]*u+K1[i3]*t; kb = K0[i3+1]*u+K1[i3+1]*t; kc = K0[i3+2]*u+K1[i3+2]*t;
+        } else {
+          a = A0[i3]; b = A0[i3+1]; c = A0[i3+2]; ka = K0[i3]; kb = K0[i3+1]; kc = K0[i3+2];
+        }
+        let lam = lamOf(a, ka, lo[0], hi[0]), l2 = lamOf(b, kb, lo[1], hi[1]), l3 = lamOf(c, kc, lo[2], hi[2]);
+        if (l2 < lam)lam = l2; if (l3 < lam)lam = l3;
+        const lt = lam*tau, g = lt < .5?0: lt*(1-Math.exp(-d/lt));
+        o[0] = a+ka*g; o[1] = b+kb*g; o[2] = c+kc*g;
+      }
+      const tv = [0, 0, 0];
+      // top/bottom profiles are read from the side-extended rows, so corners continue the sides seamlessly
+      function vset(top) {
+        const n = W, a0 = new Float32Array(n*3), a1 = new Float32Array(n*3), a2 = new Float32Array(n*3);
+        const rw = top?E.rT: E.rB, gv = E.gv, G = gv.G, m = gv.m;
+        const rows = top?[1, m+1, G+1]: [h-2, h-2-m, h-2-G];
+        for (let X = 0; X < n; X++) {
+          const rx = X-x0, X3 = X*3;
+          if (rx >= 0 && rx < w) {
+            for (let c = 0; c < 3; c++) {
+              a0[X3+c] = rw.a0[rx*3+c]; a1[X3+c] = rw.a1[rx*3+c]; a2[X3+c] = rw.a2[rx*3+c];
+            }
+          } else {
+            const P = rx < 0?PL: PR, d = rx < 0?-rx: rx-w+1;
+            ext(P, rows[0], d, tv); a0[X3] = tv[0]; a0[X3+1] = tv[1]; a0[X3+2] = tv[2];
+            if (G) {
+              ext(P, rows[1], d, tv); a1[X3] = tv[0]; a1[X3+1] = tv[1]; a1[X3+2] = tv[2];
+              ext(P, rows[2], d, tv); a2[X3] = tv[0]; a2[X3+1] = tv[1]; a2[X3+2] = tv[2];
+            }
+          }
+        }
+        return makeSet(n, a0, a1, a2, G, m, r0, sc, H+2);
+      }
+      const PT = T?vset(true): null, PB = B?vset(false): null;
+
+      const ss = []; if (L)ss.push(E.nz.L); if (R)ss.push(E.nz.R); if (T)ss.push(E.nz.T); if (B)ss.push(E.nz.B);
+      const sig = Math.min(12, ss.length?ss.reduce((p, c)=>p+c, 0)/ss.length: 0)*S.grain/100;
+      const sg = Math.max(sig, .45); // never below a light dither, so smooth tails cannot band
+      const c3 = [0, 0, 0];
+
+      // fills rows [ya,yb) x columns [xa,xb) into o (row 0 of o = row ya)
+      function fill(o, xa, xb, ya, yb) {
+        const sw = xb-xa;
+        for (let y = ya; y < yb; y++) {
+          const ry = y-y0, inY = ry >= 0 && ry < h;
+          for (let x = xa; x < xb; x++) {
+            const i = ((y-ya)*sw+(x-xa))*4, rx = x-x0;
+            let r, gg, b, a = 0;
+            if (inY && rx >= 0 && rx < w) {
+              let dm = 1e9, s = -1;
+              if (L && rx < dm) {
+                dm = rx; s = 0
+              }
+              if (R && w-1-rx < dm) {
+                dm = w-1-rx; s = 1
+              }
+              if (T && ry < dm) {
+                dm = ry; s = 2
+              }
+              if (B && h-1-ry < dm) {
+                dm = h-1-ry; s = 3
+              }
+              const p = (ry*w+rx)*4;
+              if (s < 0 || dm >= f) {
+                o[i] = src[p]; o[i+1] = src[p+1]; o[i+2] = src[p+2]; o[i+3] = 255; continue;
+              }
+              const u = dm/f; a = u*u*(3-2*u);
+              const P = s === 0?PL: s === 1?PR: s === 2?PT: PB, q = (s < 2?ry: x)*3;
+              // blend target = edge colour continued inward along the same slope
+              r = (P.A0[q]-P.K0[q]*dm)*(1-a)+src[p]*a; gg = (P.A0[q+1]-P.K0[q+1]*dm)*(1-a)+src[p+1]*a; b = (P.A0[q+2]-P.K0[q+2]*dm)*(1-a)+src[p+2]*a;
+            } else {
+              if (inY) {
+                if (rx < 0)ext(PL, ry, -rx, c3); else ext(PR, ry, rx-w+1, c3);
+              } else if (ry < 0)ext(PT, x, -ry, c3); else ext(PB, x, ry-h+1, c3);
+              r = c3[0]; gg = c3[1]; b = c3[2];
+            }
+            const n = (Math.random()+Math.random()+Math.random()-1.5)*2*sg*(1-a); r += n; gg += n; b += n;
+            o[i] = r; o[i+1] = gg; o[i+2] = b; o[i+3] = 255;
+          }
+        }
+      }
+      return {L, R, T, B, f, fill};
+    }
+    /*CORE-END*/
+
+    function base2(s) {
+      let Q = CA.get('2:'+s); if (Q)return Q;
+      if (CA.size >= 8)CA.delete(CA.keys().next().value);
+      const w = Math.max(1, Math.round(img.naturalWidth*s)),
+      h = Math.max(1, Math.round(img.naturalHeight*s));
+      const t = document.createElement('canvas'); t.width = w; t.height = h;
+      const tc = t.getContext('2d'); tc.imageSmoothingQuality = 'high';
+      tc.fillStyle = '#fff'; tc.fillRect(0, 0, w, h); tc.drawImage(img, 0, 0, w, h);
+      const src = tc.getImageData(0, 0, w, h).data, br = borderRange(src, w, h);
+      Q = {s, w, h, t, src, lo: br.lo, hi: br.hi, ec: null, ek: ''}; CA.set('2:'+s, Q); return Q;
+    }
+
+    function base(s) {
+      return S.method === 2?base2(s): base1(s);
+    }
+
+    function fit() {
+      if (!img||!lastW)return;
+      const aw = $('stage').clientWidth-24,
+      ah = innerHeight*(innerWidth >= 900?.82: .36);
+      const k = Math.min(1, aw/lastW, ah/lastH),
+      c = $('c');
+      c.style.width = lastW*k+'px'; c.style.height = lastH*k+'px';
+    }
+    addEventListener('resize', fit);
+
+    async function render(final, onProg) {
+      if (!img)return;
+      const rid=++renderId;
+      const nw = img.naturalWidth,
+      nh = img.naturalHeight;
+      const W0 = Math.max(S.w, nw),
+      H0 = Math.max(S.h, nh);
+      if ($('W').value != W0)$('W').value = W0;
+      if ($('H').value != H0)$('H').value = H0;
+      const sc = final?1: previewScale(W0, H0);
+      if (sc === 1 && doneFull === ver)return; // full-quality result already on screen
+      const Q = base(sc),
+      w = Q.w,
+      h = Q.h;
+      const W = sc === 1?W0: Math.max(w, Math.round(W0*sc)),
+      H = sc === 1?H0: Math.max(h, Math.round(H0*sc));
+      const x0 = Math.round((W-w)*S.ax/100),
+      y0 = Math.round((H-h)*S.ay/100);
+      const cv = $('c');
+      if (cv.width !== W)cv.width = W;
+      if (cv.height !== H)cv.height = H;
+      const ctx = cv.getContext('2d');
+      const syn = (S.method === 2?makeSynth2: makeSynth1)(Q, sc, W, H, x0, y0, nw, nh), f = syn.f;
+
+      // The untouched interior of the original is copied 1:1; only margins + seam band are computed.
+      const fi = Math.ceil(f);
+      const ix0 = syn.L?fi: 0,
+      ix1 = w-(syn.R?fi: 0),
+      iy0 = syn.T?fi: 0,
+      iy1 = h-(syn.B?fi: 0);
+      const hasI = ix0 < ix1 && iy0 < iy1;
+      let regions;
+      if (hasI) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(Q.t, ix0, iy0, ix1-ix0, iy1-iy0, x0+ix0, y0+iy0, ix1-ix0, iy1-iy0);
+        const gx0 = x0+ix0,
+        gx1 = x0+ix1,
+        gy0 = y0+iy0,
+        gy1 = y0+iy1;
+        regions = [[0,
+          W,
+          0,
+          gy0],
+          [0,
+            W,
+            gy1,
+            H],
+          [0,
+            gx0,
+            gy0,
+            gy1],
+          [gx1,
+            W,
+            gy0,
+            gy1]];
+      } else regions = [[0,
+          W,
+          0,
+          H]];
+
+      const MAXPX = 4e6;
+      if (!OB || OB.length < MAXPX*4)OB = new Uint8ClampedArray(MAXPX*4);
+      const o = OB;
+      let tot = 0,
+      done = 0;
+      for (const [xa, xb, ya, yb] of regions)tot += Math.max(0, xb-xa)*Math.max(0, yb-ya);
+      const bandPx = onProg?3e5: MAXPX,
+      t0 = performance.now(); let lastY = t0;
+      for (const [xa, xb, ya, yb] of regions) {
+        const sw = xb-xa; if (sw <= 0 || yb <= ya)continue;
+        const bh = Math.max(1, Math.floor(bandPx/sw));
+        for (let ys = ya; ys < yb; ys += bh) {
+          const ye = Math.min(yb, ys+bh);
+          syn.fill(o, xa, xb, ys, ye);
           ctx.putImageData(new ImageData(o.subarray(0, sw*(ye-ys)*4), sw, ye-ys), xa, ys);
           if (onProg) {
             done += sw*(ye-ys); const tn = performance.now();
